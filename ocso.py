@@ -7,11 +7,10 @@ import re
 import pandas as pd
 import numpy as np 
 import re
-from transformers import pipeline
 from sklearn.metrics.pairwise import cosine_similarity
 import openai
 
-openai.api_key = 'sk-proj-uNGyg7PNZrnM8VY5OTMkT3BlbkFJzSgQirrK7Q843NDZiYYb'
+openai.api_key = st.secrets["openAI_Key"]
 
 #I will first scrape OMSCentral data and put it into a data frame. 
 def scrape_oms_central():   
@@ -166,12 +165,14 @@ def calculate_study_hours(learning_prefs, constraints):
     
     hours_sleeping_per_week = hours_sleeping_per_week.total_seconds() * 7 / 3600  # Convert seconds to hours
 
+    #Calculating the total hours available per week based on all user inputs. Rounding to 2 decimal places for optimal user experience
     total_hours_available_per_week = (24 * 7) - (leisure_hours_per_week + chores_hours_per_week + workout_hours_per_week + family_hours_per_week + work_hours_per_week + dinner_hours_per_week + hours_sleeping_per_week + hobbies_hours_per_week)
     total_hours_available_per_week = round(total_hours_available_per_week, 2)
     
     return total_hours_available_per_week
 
 def calculate_true_hours(raw_data, skill_level, learning_goal):
+    #This function takes a users skill level and desired grade and calculates the estimated actual time per week for the course using OMSCentral as a baseline
     skill_multipliers = {'below average': 1.25, 'average': 1.0, 'above average': 0.75}
     goal_multipliers = {'A': 1.25, 'B': 1.0, 'C': 0.75}
     
@@ -183,12 +184,6 @@ def calculate_true_hours(raw_data, skill_level, learning_goal):
     true_hours_df['Estimated Hours'] = round(true_hours_df['OMSC Hours'] * multiplier_skill * multiplier_goal, 2)
     
     return true_hours_df
-
-def calculate_similarity(embedding1, embedding2):
-    embedding1_vector = embedding1['last_hidden_state']
-    embedding2_vector = embedding2['last_hidden_state']
-    
-    return cosine_similarity([embedding1_vector], [embedding2_vector])[0][0]
 
 
 # Streamlit app. Using the Streamlit documentation: https://docs.streamlit.io/library/api-reference/data
@@ -208,10 +203,12 @@ def main():
     study_hours_per_week = calculate_study_hours(learning_prefs, constraints)
 
     st.write("Based on your inputs, the recommended study hours per week are:", study_hours_per_week)
-                
+    
+    #Creating a list of classes by first scraping OMSCentral and then calculating the estimated hours based on skills/grade preferences. Filtering out courses where 
+    #the estimated hours exceed the total available hours
     classes_df = calculate_true_hours(scrape_oms_central(), learning_prefs['skill_level'], learning_prefs['learning_goal'])
     filtered_df = classes_df[classes_df['Estimated Hours'] < study_hours_per_week]
-        
+    
     column_order = ['Course ID', 'Course Name', 'Estimated Hours', 'OMSC Hours', 'Difficulty', 'Rating', 'Description', 'Credit Hours', 'Meets Foundational Requirement']
     filtered_df = filtered_df.reindex(columns=column_order)
     filtered_df = filtered_df.dropna(subset=['Description'])
@@ -224,13 +221,16 @@ def main():
     st.dataframe(filtered_df, use_container_width=True)
     
     user_input = st.text_input("What do you want to learn? (Optional)")
-        
+    
+    #If user inputs a learning preference, the following code calls OpenAI in order to create a recommended set of courses for the student        
     if user_input:
+        #Take the filtered dataframe of classes and convert that into a text for an OpenAI prompt. Context will be a string containing every course name, id, and description
         context = ""
         for _, row in filtered_df.iterrows():
             # Converting all filtered courses into context for OpenAI
             context += f"{row['Course Name']} ({row['Course ID']}): {row['Description']}\n"
 
+        #Experimented with several dozen iterations of prompts. The following structure outputted the vbest results.
         prompt = '''From the following course list and course descriptions, recommend up to 5 classes for a student
                     who has stated the following learning goal:''' + user_input
         
@@ -248,6 +248,7 @@ def main():
             prompt=prompt,
             max_tokens=350)
         
+        # Output OpenAI's response
         st.write(response['choices'][0]['text'])
 
 if __name__ == "__main__":
